@@ -1,0 +1,85 @@
+const bcrypt = require('bcryptjs');
+const db = require('./db');
+
+async function main() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      full_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin','cashier','captain','kitchen')),
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      category_id INTEGER REFERENCES categories(id),
+      price NUMERIC(12,2) NOT NULL DEFAULT 0,
+      cost NUMERIC(12,2) NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS cafe_tables (
+      id SERIAL PRIMARY KEY,
+      table_number TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL DEFAULT 'free' CHECK (status IN ('free','occupied','reserved'))
+    );
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      table_id INTEGER REFERENCES cafe_tables(id),
+      order_type TEXT NOT NULL DEFAULT 'table' CHECK (order_type IN ('table','takeaway','delivery')),
+      created_by INTEGER REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','preparing','ready','delivered','closed','cancelled')),
+      payment_status TEXT NOT NULL DEFAULT 'unpaid' CHECK (payment_status IN ('unpaid','paid','cancelled')),
+      customer_note TEXT,
+      total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      paid_at TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS order_items (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      product_id INTEGER REFERENCES products(id),
+      product_name TEXT NOT NULL,
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      unit_price NUMERIC(12,2) NOT NULL,
+      line_total NUMERIC(12,2) NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS expenses (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      note TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  const users = [
+    ['admin','System Admin','admin123','admin'],
+    ['cashier','Cashier','cashier123','cashier'],
+    ['captain','Captain','captain123','captain'],
+    ['kitchen','Kitchen','kitchen123','kitchen'],
+  ];
+  for (const [username, full, pass, role] of users) {
+    const hash = await bcrypt.hash(pass, 10);
+    await db.query(`INSERT INTO users(username,full_name,password_hash,role) VALUES($1,$2,$3,$4)
+      ON CONFLICT(username) DO NOTHING`, [username, full, hash, role]);
+  }
+
+  await db.query(`INSERT INTO categories(name) VALUES ('Hot Drinks'),('Cold Drinks'),('Desserts'),('Food') ON CONFLICT(name) DO NOTHING`);
+  await db.query(`INSERT INTO cafe_tables(table_number) VALUES ('1'),('2'),('3'),('4'),('5'),('6'),('7'),('8') ON CONFLICT(table_number) DO NOTHING`);
+  await db.query(`INSERT INTO products(name,category_id,price,cost) SELECT 'Espresso', id, 2.50, 0.60 FROM categories WHERE name='Hot Drinks' ON CONFLICT DO NOTHING`);
+  await db.query(`INSERT INTO products(name,category_id,price,cost) SELECT 'Latte', id, 4.00, 1.10 FROM categories WHERE name='Hot Drinks' ON CONFLICT DO NOTHING`);
+  await db.query(`INSERT INTO products(name,category_id,price,cost) SELECT 'Cheesecake', id, 5.00, 2.00 FROM categories WHERE name='Desserts' ON CONFLICT DO NOTHING`);
+
+  console.log('Database initialized. Default users: admin/admin123, cashier/cashier123, captain/captain123, kitchen/kitchen123');
+  await db.pool.end();
+}
+main().catch(err => { console.error(err); process.exit(1); });

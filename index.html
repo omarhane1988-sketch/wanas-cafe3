@@ -1,0 +1,83 @@
+const express = require('express');
+const session = require('express-session');
+const PgSession = require('connect-pg-simple')(session);
+const helmet = require('helmet');
+const http = require('http');
+const { Server } = require('socket.io');
+const bcrypt = require('bcryptjs');
+const db = require('./db');
+require('dotenv').config();
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+const PORT = process.env.PORT || 3000;
+
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(session({
+  store: new PgSession({ pool: db.pool, createTableIfMissing: true }),
+  secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*12 }
+}));
+app.use(express.static('public'));
+
+function requireAuth(req,res,next){ if(!req.session.user) return res.status(401).json({error:'LOGIN_REQUIRED'}); next(); }
+function allow(...roles){ return (req,res,next)=>{ if(!req.session.user) return res.status(401).json({error:'LOGIN_REQUIRED'}); if(!roles.includes(req.session.user.role)) return res.status(403).json({error:'FORBIDDEN'}); next(); }; }
+function emitRefresh(){ io.emit('refresh'); }
+
+app.post('/api/login', async (req,res)=>{
+  const { username, password } = req.body;
+  const r = await db.query('SELECT * FROM users WHERE username=$1 AND active=true', [username]);
+  const user = r.rows[0];
+  if(!user || !(await bcrypt.compare(password, user.password_hash))) return res.status(401).json({error:'بيانات الدخول غير صحيحة'});
+  req.session.user = { id:user.id, username:user.username, full_name:user.full_name, role:user.role };
+  res.json(req.session.user);
+});
+app.post('/api/logout', (req,res)=> req.session.destroy(()=>res.json({ok:true})));
+app.get('/api/me', (req,res)=> res.json({user:req.session.user || null}));
+
+app.get('/api/users', allow('admin'), async (req,res)=>{ const r=await db.query('SELECT id,username,full_name,role,active,created_at FROM users ORDER BY id'); res.json(r.rows); });
+app.post('/api/users', allow('admin'), async (req,res)=>{ const {username,full_name,password,role,active=true}=req.body; const hash=await bcrypt.hash(password,10); const r=await db.query('INSERT INTO users(username,full_name,password_hash,role,active) VALUES($1,$2,$3,$4,$5) RETURNING id,username,full_name,role,active',[username,full_name,hash,role,active]); res.json(r.rows[0]); });
+app.put('/api/users/:id', allow('admin'), async (req,res)=>{ const {full_name,role,active,password}=req.body; if(password){ const hash=await bcrypt.hash(password,10); await db.query('UPDATE users SET full_name=$1,role=$2,active=$3,password_hash=$4 WHERE id=$5',[full_name,role,active,hash,req.params.id]); } else { await db.query('UPDATE users SET full_name=$1,role=$2,active=$3 WHERE id=$4',[full_name,role,active,req.params.id]); } res.json({ok:true}); });
+
+app.get('/api/categories', requireAuth, async (req,res)=>{ const r=await db.query('SELECT * FROM categories ORDER BY name'); res.json(r.rows); });
+app.post('/api/categories', allow('admin','cashier'), async (req,res)=>{ const r=await db.query('INSERT INTO categories(name) VALUES($1) RETURNING *',[req.body.name]); res.json(r.rows[0]); });
+
+app.get('/api/products', requireAuth, async (req,res)=>{ const r=await db.query('SELECT p.*, c.name category FROM products p LEFT JOIN categories c ON c.id=p.category_id ORDER BY p.id DESC'); res.json(r.rows); });
+app.post('/api/products', allow('admin','cashier'), async (req,res)=>{ const {name,category_id,price,cost=0,active=true}=req.body; const r=await db.query('INSERT INTO products(name,category_id,price,cost,active) VALUES($1,$2,$3,$4,$5) RETURNING *',[name,category_id || null,price,cost,active]); emitRefresh(); res.json(r.rows[0]); });
+app.put('/api/products/:id', allow('admin','cashier'), async (req,res)=>{ const {name,category_id,price,cost=0,active=true}=req.body; await db.query('UPDATE products SET name=$1,category_id=$2,price=$3,cost=$4,active=$5 WHERE id=$6',[name,category_id||null,price,cost,active,req.params.id]); emitRefresh(); res.json({ok:true}); });
+
+app.get('/api/tables', requireAuth, async (req,res)=>{ const r=await db.query('SELECT * FROM cafe_tables ORDER BY table_number::int NULLS LAST, table_number'); res.json(r.rows); });
+app.post('/api/tables', allow('admin','cashier'), async (req,res)=>{ const r=await db.query('INSERT INTO cafe_tables(table_number,status) VALUES($1,$2) RETURNING *',[req.body.table_number, req.body.status || 'free']); emitRefresh(); res.json(r.rows[0]); });
+
+app.get('/api/orders', requireAuth, async (req,res)=>{ const r=await db.query(`SELECT o.*, t.table_number, u.full_name created_by_name FROM orders o LEFT JOIN cafe_tables t ON t.id=o.table_id LEFT JOIN users u ON u.id=o.created_by ORDER BY o.id DESC LIMIT 200`); res.json(r.rows); });
+app.get('/api/orders/:id/items', requireAuth, async (req,res)=>{ const r=await db.query('SELECT * FROM order_items WHERE order_id=$1 ORDER BY id',[req.params.id]); res.json(r.rows); });
+app.post('/api/orders', allow('admin','cashier','captain'), async (req,res)=>{
+  const { table_id, order_type='table', customer_note='', items=[] } = req.body;
+  if(!items.length) return res.status(400).json({error:'لا يوجد منتجات'});
+  const client = await db.pool.connect();
+  try{
+    await client.query('BEGIN');
+    let total = 0;
+    const products = [];
+    for(const it of items){ const pr = await client.query('SELECT * FROM products WHERE id=$1 AND active=true',[it.product_id]); if(!pr.rows[0]) throw new Error('منتج غير موجود'); const qty = Number(it.quantity||1); const line = Number(pr.rows[0].price)*qty; total += line; products.push({p:pr.rows[0], qty, line}); }
+    const ord = await client.query('INSERT INTO orders(table_id,order_type,created_by,customer_note,total) VALUES($1,$2,$3,$4,$5) RETURNING *',[table_id||null,order_type,req.session.user.id,customer_note,total]);
+    for(const x of products){ await client.query('INSERT INTO order_items(order_id,product_id,product_name,quantity,unit_price,line_total) VALUES($1,$2,$3,$4,$5,$6)',[ord.rows[0].id,x.p.id,x.p.name,x.qty,x.p.price,x.line]); }
+    if(table_id) await client.query("UPDATE cafe_tables SET status='occupied' WHERE id=$1",[table_id]);
+    await client.query('COMMIT'); emitRefresh(); res.json(ord.rows[0]);
+  } catch(e){ await client.query('ROLLBACK'); res.status(400).json({error:e.message}); } finally { client.release(); }
+});
+app.put('/api/orders/:id/status', allow('admin','cashier','kitchen','captain'), async (req,res)=>{ await db.query('UPDATE orders SET status=$1 WHERE id=$2',[req.body.status,req.params.id]); emitRefresh(); res.json({ok:true}); });
+app.put('/api/orders/:id/pay', allow('admin','cashier'), async (req,res)=>{ const r=await db.query("UPDATE orders SET payment_status='paid',status='closed',paid_at=NOW() WHERE id=$1 RETURNING table_id",[req.params.id]); if(r.rows[0]?.table_id) await db.query("UPDATE cafe_tables SET status='free' WHERE id=$1",[r.rows[0].table_id]); emitRefresh(); res.json({ok:true}); });
+app.put('/api/orders/:id/cancel', allow('admin','cashier'), async (req,res)=>{ await db.query("UPDATE orders SET payment_status='cancelled',status='cancelled' WHERE id=$1",[req.params.id]); emitRefresh(); res.json({ok:true}); });
+
+app.get('/api/expenses', allow('admin','cashier'), async (req,res)=>{ const r=await db.query('SELECT e.*, u.full_name created_by_name FROM expenses e LEFT JOIN users u ON u.id=e.created_by ORDER BY e.id DESC LIMIT 200'); res.json(r.rows); });
+app.post('/api/expenses', allow('admin','cashier'), async (req,res)=>{ const {title,amount,note}=req.body; const r=await db.query('INSERT INTO expenses(title,amount,note,created_by) VALUES($1,$2,$3,$4) RETURNING *',[title,amount,note||'',req.session.user.id]); res.json(r.rows[0]); });
+app.get('/api/reports/today', allow('admin','cashier'), async (req,res)=>{ const sales=await db.query("SELECT COALESCE(SUM(total),0) total, COUNT(*) count FROM orders WHERE payment_status='paid' AND paid_at::date=CURRENT_DATE"); const exp=await db.query("SELECT COALESCE(SUM(amount),0) total FROM expenses WHERE created_at::date=CURRENT_DATE"); res.json({sales:sales.rows[0], expenses:exp.rows[0], net:Number(sales.rows[0].total)-Number(exp.rows[0].total)}); });
+
+io.on('connection', ()=>{});
+server.listen(PORT, '0.0.0.0', ()=> console.log(`Cafe POS running on port ${PORT}`));

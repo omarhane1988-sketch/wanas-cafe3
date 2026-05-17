@@ -1,0 +1,34 @@
+# Cafe POS Pro V2.1
+
+## Local run
+
+```bash
+npm install
+npm run init-db
+npm start
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+## Default users
+
+- admin / admin123
+- cashier / cashier123
+- captain / captain123
+- kitchen / kitchen123
+
+## Render deployment
+
+1. Upload all files to the root of your GitHub repository.
+2. Confirm these two files are in the repository root:
+   - package.json
+   - render.yaml
+3. In Render: New > Blueprint.
+4. Select the GitHub repository.
+5. Click Apply Blueprint.
+
+Important: Do not paste the content of package.json inside render.yaml. They must be two separate files.
