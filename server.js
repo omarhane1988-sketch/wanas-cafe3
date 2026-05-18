@@ -24,6 +24,17 @@ let tables = [1, 2, 3, 4, 5, 6, 7, 8].map((number, index) => ({ id: index + 1, n
 let orders = [];
 let expenses = [];
 let dailySales = [];
+let expenseCategories = [
+  { id: 1, name: 'رواتب' },
+  { id: 2, name: 'إيجار' },
+  { id: 3, name: 'مواد أولية' },
+  { id: 4, name: 'كهرباء وماء' },
+  { id: 5, name: 'صيانة' },
+  { id: 6, name: 'أخرى' }
+];
+let settings = {
+  currency: 'SYP'
+};
 
 function nextId(arr) {
   return arr.length ? Math.max(...arr.map(x => x.id)) + 1 : 1;
@@ -31,6 +42,27 @@ function nextId(arr) {
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '').replace(/"/g, '""');
+  return `"${text}"`;
+}
+
+function sendCsv(res, filename, rows) {
+  const csv = rows.map(row => row.map(csvEscape).join(',')).join('
+');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send('﻿' + csv);
+}
+
+function sameMonth(dateValue, month) {
+  return String(dateValue || '').slice(0, 7) === month;
+}
+
+function orderDate(order) {
+  return String(order.createdAt || '').slice(0, 10);
 }
 
 function htmlPage(body) {
@@ -85,6 +117,8 @@ app.get('/app', (req, res) => {
       <button class="dark" data-screen="dashboard">الرئيسية</button>
       <button class="dark nav-admin" data-screen="users">المستخدمون</button>
       <button class="dark nav-admin" data-screen="products">المنتجات</button>
+      <button class="dark nav-admin" data-screen="settings">الإعدادات</button>
+      <button class="dark nav-admin nav-cashier" data-screen="reports">التقارير</button>
       <button class="dark nav-captain" data-screen="captain">الكابتن</button>
       <button class="dark nav-cashier" data-screen="cashier">المحاسب</button>
       <button class="dark nav-cashier" data-screen="dailySales">مبيعات يومية إجمالية</button>
@@ -115,6 +149,29 @@ app.get('/app', (req, res) => {
     <div class="card"><h2>قائمة المنتجات</h2><div id="productsList"></div></div>
   </section>
 
+  <section id="settings" class="screen hide">
+    <div class="card">
+      <h2>إعدادات العملة</h2>
+      <div class="row">
+        <select id="currencySelect">
+          <option value="SYP">ليرة سورية SYP</option>
+          <option value="USD">دولار USD</option>
+          <option value="LBP">ليرة لبنانية LBP</option>
+          <option value="EUR">يورو EUR</option>
+        </select>
+        <button id="saveCurrencyBtn">حفظ العملة</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>تعريف بنود المصاريف</h2>
+      <div class="row">
+        <input id="expenseCategoryName" placeholder="مثال: قهوة، مواد تنظيف، صيانة">
+        <button id="addExpenseCategoryBtn">إضافة بند مصروف</button>
+      </div>
+      <div id="expenseCategoriesList"></div>
+    </div>
+  </section>
+
   <section id="captain" class="screen hide">
     <div class="card"><h2>طلب طاولة - كابتن الصالة</h2><div class="row"><select id="captainTable"></select><button id="sendCaptainOrderBtn">إرسال الطلب للمطبخ والمحاسب</button></div><h3>المنتجات</h3><div id="captainProducts" class="products"></div><h3>سلة الكابتن</h3><div id="captainCart"></div></div>
     <div class="card"><h2>طلبات الطاولات</h2><div id="captainOrders"></div></div>
@@ -133,8 +190,22 @@ app.get('/app', (req, res) => {
   <section id="kitchen" class="screen hide"><div class="card"><h2>شاشة المطبخ / البار</h2><div id="kitchenOrders"></div></div></section>
 
   <section id="expenses" class="screen hide">
-    <div class="card"><h2>إضافة مصروف</h2><div class="row"><input id="expenseDate" type="date"><input id="expenseTitle" placeholder="بيان المصروف"><input id="expenseAmount" type="number" placeholder="المبلغ"><button id="addExpenseBtn">إضافة مصروف</button></div></div>
+    <div class="card"><h2>إضافة مصروف</h2><div class="row"><input id="expenseDate" type="date"><select id="expenseCategory"></select><input id="expenseTitle" placeholder="بيان المصروف"><input id="expenseAmount" type="number" placeholder="المبلغ"><button id="addExpenseBtn">إضافة مصروف</button></div></div>
     <div class="card"><h2>قائمة المصاريف</h2><div id="expensesList"></div></div>
+  </section>
+
+  <section id="reports" class="screen hide">
+    <div class="card">
+      <h2>تصدير تقارير شهرية Excel</h2>
+      <p class="muted">اختر الشهر ثم صدّر التقرير المطلوب. الملفات تفتح مباشرة في Excel.</p>
+      <div class="row">
+        <input id="reportMonth" type="month">
+        <button id="exportMonthlyBtn">تقرير المبيعات والمصاريف</button>
+        <button id="exportTopProductsBtn">أكثر المنتجات مبيعاً</button>
+        <button id="exportTopExpensesBtn">أكبر المصاريف</button>
+        <button id="exportProfitBtn">تقرير الربح</button>
+      </div>
+    </div>
   </section>
 </div>
 
@@ -144,7 +215,7 @@ if(!currentUser){ window.location.href = '/'; }
 let state = { users: [], products: [], tables: [], orders: [], expenses: [], dailySales: [] };
 let captainCart = [];
 let cashierCart = [];
-function money(v){ return '$' + Number(v || 0).toFixed(2); }
+function money(v){ return Number(v || 0).toFixed(2) + ' ' + (state.settings?.currency || 'SYP'); }
 function cartTotal(cart){ return cart.reduce((sum, item) => sum + item.price * item.qty, 0); }
 async function api(url, options){ const res = await fetch(url, options || {}); return await res.json(); }
 
@@ -172,12 +243,15 @@ async function loadState(){
   const expenses = state.expenses.reduce((s,e) => s + e.amount, 0);
   salesTotal.innerText = money(orderPaid); manualSalesTotal.innerText = money(manualPaid); pendingTotal.innerText = state.orders.filter(o => o.paymentStatus === 'unpaid').length; expenseTotal.innerText = money(expenses); netTotal.innerText = money(orderPaid + manualPaid - expenses);
   dashboardOrders.innerHTML = renderOrders(state.orders.slice(-10).reverse(), false);
+  currencySelect.value = state.settings.currency;
+  expenseCategory.innerHTML = state.expenseCategories.map(c => '<option value="' + c.name + '">' + c.name + '</option>').join('');
+  expenseCategoriesList.innerHTML = '<table><tr><th>ID</th><th>بند المصروف</th></tr>' + state.expenseCategories.map(c => '<tr><td>' + c.id + '</td><td>' + c.name + '</td></tr>').join('') + '</table>';
   usersList.innerHTML = '<table><tr><th>ID</th><th>المستخدم</th><th>الصلاحية</th><th>الحالة</th><th>إجراء</th></tr>' + state.users.map(u => '<tr><td>' + u.id + '</td><td>' + u.username + '</td><td>' + u.role + '</td><td>' + (u.active ? 'فعال' : 'موقوف') + '</td><td><button class="warn toggleUserBtn" data-id="' + u.id + '">' + (u.active ? 'إيقاف' : 'تفعيل') + '</button> <button class="danger deleteUserBtn" data-id="' + u.id + '">حذف</button></td></tr>').join('') + '</table>';
   productsList.innerHTML = '<table><tr><th>ID</th><th>المنتج</th><th>التصنيف</th><th>السعر</th></tr>' + state.products.map(p => '<tr><td>' + p.id + '</td><td>' + p.name + '</td><td>' + p.category + '</td><td>' + money(p.price) + '</td></tr>').join('') + '</table>';
   captainTable.innerHTML = state.tables.map(t => '<option value="' + t.number + '">طاولة ' + t.number + ' - ' + t.status + '</option>').join('');
   renderProductButtons(); renderCart('captainCart', captainCart); renderCart('cashierCart', cashierCart);
   captainOrders.innerHTML = renderOrders(state.orders, false); pendingOrders.innerHTML = renderOrders(state.orders.filter(o => o.paymentStatus === 'unpaid'), true); renderKitchen();
-  expensesList.innerHTML = '<table><tr><th>ID</th><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>المستخدم</th></tr>' + state.expenses.map(e => '<tr><td>' + e.id + '</td><td>' + e.date + '</td><td>' + e.title + '</td><td>' + money(e.amount) + '</td><td>' + e.createdBy + '</td></tr>').join('') + '</table>';
+  expensesList.innerHTML = '<table><tr><th>ID</th><th>التاريخ</th><th>البند</th><th>البيان</th><th>المبلغ</th><th>المستخدم</th></tr>' + state.expenses.map(e => '<tr><td>' + e.id + '</td><td>' + e.date + '</td><td>' + (e.category || '') + '</td><td>' + e.title + '</td><td>' + money(e.amount) + '</td><td>' + e.createdBy + '</td></tr>').join('') + '</table>';
   dailySalesList.innerHTML = '<table><tr><th>ID</th><th>التاريخ</th><th>المبلغ</th><th>ملاحظات</th><th>المستخدم</th></tr>' + state.dailySales.map(s => '<tr><td>' + s.id + '</td><td>' + s.date + '</td><td>' + money(s.amount) + '</td><td>' + (s.note || '') + '</td><td>' + s.createdBy + '</td></tr>').join('') + '</table>';
   bindButtons();
 }
@@ -187,7 +261,14 @@ function setupActions(){
   addProductBtn.addEventListener('click', async function(){ await api('/api/products', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: productName.value, category: productCategory.value, price: Number(productPrice.value) }) }); productName.value=''; productCategory.value=''; productPrice.value=''; await loadState(); alert('تمت إضافة المنتج'); });
   sendCaptainOrderBtn.addEventListener('click', async function(){ if(captainCart.length === 0){ alert('اختر منتجات أولاً'); return; } await api('/api/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type:'Table', table: captainTable.value, items: captainCart, createdBy: currentUser.username, paymentStatus:'unpaid', status:'pending' }) }); captainCart = []; await loadState(); alert('تم إرسال الطلب للمحاسب والمطبخ'); });
   sendCashierSaleBtn.addEventListener('click', async function(){ if(cashierCart.length === 0){ alert('اختر منتجات أولاً'); return; } await api('/api/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type: saleType.value, table: cashierTable.value, items: cashierCart, createdBy: currentUser.username, paymentStatus:'paid', status:'closed' }) }); cashierCart = []; cashierTable.value=''; await loadState(); alert('تم تسجيل البيع المباشر'); });
-  addExpenseBtn.addEventListener('click', async function(){ await api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ date: expenseDate.value, title: expenseTitle.value, amount: Number(expenseAmount.value), createdBy: currentUser.username }) }); expenseTitle.value=''; expenseAmount.value=''; await loadState(); alert('تمت إضافة المصروف'); });
+  addExpenseBtn.addEventListener('click', async function(){ await api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ date: expenseDate.value, category: expenseCategory.value, title: expenseTitle.value, amount: Number(expenseAmount.value), createdBy: currentUser.username }) }); expenseTitle.value=''; expenseAmount.value=''; await loadState(); alert('تمت إضافة المصروف'); });
+  saveCurrencyBtn.addEventListener('click', async function(){ await api('/api/settings/currency', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ currency: currencySelect.value }) }); await loadState(); alert('تم حفظ العملة'); });
+  addExpenseCategoryBtn.addEventListener('click', async function(){ await api('/api/expense-categories', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: expenseCategoryName.value }) }); expenseCategoryName.value=''; await loadState(); alert('تمت إضافة بند المصروف'); });
+  reportMonth.value = new Date().toISOString().slice(0,7);
+  exportMonthlyBtn.addEventListener('click', function(){ window.open('/reports/monthly?month=' + reportMonth.value, '_blank'); });
+  exportTopProductsBtn.addEventListener('click', function(){ window.open('/reports/top-products?month=' + reportMonth.value, '_blank'); });
+  exportTopExpensesBtn.addEventListener('click', function(){ window.open('/reports/top-expenses?month=' + reportMonth.value, '_blank'); });
+  exportProfitBtn.addEventListener('click', function(){ window.open('/reports/profit?month=' + reportMonth.value, '_blank'); });
   addDailySaleBtn.addEventListener('click', async function(){ await api('/api/daily-sales', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ date: dailySaleDate.value, amount: Number(dailySaleAmount.value), note: dailySaleNote.value, createdBy: currentUser.username }) }); dailySaleAmount.value=''; dailySaleNote.value=''; await loadState(); alert('تم تسجيل المبيعات اليومية'); });
 }
 setupNavigation(); setupActions(); loadState().then(() => { if(currentUser.role === 'cashier') showScreen('cashier'); else if(currentUser.role === 'captain') showScreen('captain'); else if(currentUser.role === 'kitchen') showScreen('kitchen'); else showScreen('dashboard'); });
@@ -199,7 +280,7 @@ app.post('/api/login', (req, res) => {
   if (!found) return res.json({ ok: false });
   res.json({ ok: true, user: { id: found.id, username: found.username, role: found.role } });
 });
-app.get('/api/state', (req, res) => res.json({ users, products, tables, orders, expenses, dailySales }));
+app.get('/api/state', (req, res) => res.json({ users, products, tables, orders, expenses, dailySales, expenseCategories, settings }));
 app.post('/api/users', (req, res) => { const user = { id: nextId(users), username: req.body.username, password: req.body.password, role: req.body.role, active: true }; users.push(user); res.json(user); });
 app.post('/api/users/:id/toggle', (req, res) => { const user = users.find(u => u.id === Number(req.params.id)); if (!user) return res.status(404).json({ error: 'User not found' }); if (user.username === 'admin') return res.status(400).json({ error: 'Cannot disable admin' }); user.active = !user.active; res.json(user); });
 app.delete('/api/users/:id', (req, res) => { const id = Number(req.params.id); const user = users.find(u => u.id === id); if (!user) return res.status(404).json({ error: 'User not found' }); if (user.username === 'admin') return res.status(400).json({ error: 'Cannot delete admin' }); users = users.filter(u => u.id !== id); res.json({ ok: true }); });
@@ -207,6 +288,82 @@ app.post('/api/products', (req, res) => { const product = { id: nextId(products)
 app.post('/api/orders', (req, res) => { const items = req.body.items || []; const total = items.reduce((sum, i) => sum + Number(i.price) * Number(i.qty), 0); const order = { id: nextId(orders), type: req.body.type || 'Table', table: req.body.table || '', items, total, status: req.body.status || 'pending', paymentStatus: req.body.paymentStatus || 'unpaid', createdBy: req.body.createdBy || 'system', createdAt: new Date().toISOString() }; orders.push(order); const table = tables.find(t => String(t.number) === String(order.table)); if (table) table.status = 'busy'; res.json(order); });
 app.post('/api/orders/:id/pay', (req, res) => { const order = orders.find(o => o.id === Number(req.params.id)); if (!order) return res.status(404).json({ error: 'Order not found' }); order.paymentStatus = 'paid'; order.status = 'closed'; const table = tables.find(t => String(t.number) === String(order.table)); if (table) table.status = 'free'; res.json(order); });
 app.post('/api/orders/:id/status', (req, res) => { const order = orders.find(o => o.id === Number(req.params.id)); if (!order) return res.status(404).json({ error: 'Order not found' }); order.status = req.body.status; res.json(order); });
-app.post('/api/expenses', (req, res) => { const expense = { id: nextId(expenses), date: req.body.date || today(), title: req.body.title, amount: Number(req.body.amount || 0), createdBy: req.body.createdBy || 'system', createdAt: new Date().toISOString() }; expenses.push(expense); res.json(expense); });
+app.post('/api/expenses', (req, res) => { const expense = { id: nextId(expenses), date: req.body.date || today(), category: req.body.category || 'أخرى', title: req.body.title, amount: Number(req.body.amount || 0), createdBy: req.body.createdBy || 'system', createdAt: new Date().toISOString() }; expenses.push(expense); res.json(expense); });
+app.post('/api/expense-categories', (req, res) => { const name = String(req.body.name || '').trim(); if (!name) return res.status(400).json({ error: 'Name is required' }); const category = { id: nextId(expenseCategories), name }; expenseCategories.push(category); res.json(category); });
+app.post('/api/settings/currency', (req, res) => { settings.currency = req.body.currency || 'SYP'; res.json(settings); });
 app.post('/api/daily-sales', (req, res) => { const sale = { id: nextId(dailySales), date: req.body.date || today(), amount: Number(req.body.amount || 0), note: req.body.note || '', createdBy: req.body.createdBy || 'system', createdAt: new Date().toISOString() }; dailySales.push(sale); res.json(sale); });
+
+app.get('/reports/monthly', (req, res) => {
+  const month = req.query.month || today().slice(0, 7);
+  const monthOrders = orders.filter(o => sameMonth(orderDate(o), month) && o.paymentStatus === 'paid');
+  const monthDailySales = dailySales.filter(s => sameMonth(s.date, month));
+  const monthExpenses = expenses.filter(e => sameMonth(e.date, month));
+  const rows = [
+    ['Report', 'Monthly Sales and Expenses'],
+    ['Month', month],
+    ['Currency', settings.currency],
+    [],
+    ['Type', 'Date', 'Description', 'Amount', 'User'],
+    ...monthOrders.map(o => ['Order Sale', orderDate(o), `${o.type} ${o.table || ''} #${o.id}`, o.total, o.createdBy]),
+    ...monthDailySales.map(s => ['Daily Total Sale', s.date, s.note || 'Daily total', s.amount, s.createdBy]),
+    ...monthExpenses.map(e => ['Expense', e.date, `${e.category || ''} - ${e.title || ''}`, -Math.abs(e.amount), e.createdBy])
+  ];
+  sendCsv(res, `monthly-report-${month}.csv`, rows);
+});
+
+app.get('/reports/top-products', (req, res) => {
+  const month = req.query.month || today().slice(0, 7);
+  const map = new Map();
+  orders.filter(o => sameMonth(orderDate(o), month) && o.paymentStatus === 'paid').forEach(o => {
+    (o.items || []).forEach(i => {
+      const key = i.name;
+      const old = map.get(key) || { product: key, quantity: 0, sales: 0 };
+      old.quantity += Number(i.qty || 0);
+      old.sales += Number(i.price || 0) * Number(i.qty || 0);
+      map.set(key, old);
+    });
+  });
+  const data = Array.from(map.values()).sort((a, b) => b.quantity - a.quantity || b.sales - a.sales);
+  const rows = [['Report', 'Top Selling Products'], ['Month', month], ['Currency', settings.currency], [], ['Product', 'Quantity Sold', 'Sales Amount'], ...data.map(x => [x.product, x.quantity, x.sales])];
+  sendCsv(res, `top-products-${month}.csv`, rows);
+});
+
+app.get('/reports/top-expenses', (req, res) => {
+  const month = req.query.month || today().slice(0, 7);
+  const map = new Map();
+  expenses.filter(e => sameMonth(e.date, month)).forEach(e => {
+    const key = e.category || 'أخرى';
+    const old = map.get(key) || { category: key, amount: 0, count: 0 };
+    old.amount += Number(e.amount || 0);
+    old.count += 1;
+    map.set(key, old);
+  });
+  const data = Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+  const rows = [['Report', 'Top Expenses'], ['Month', month], ['Currency', settings.currency], [], ['Expense Category', 'Count', 'Total Amount'], ...data.map(x => [x.category, x.count, x.amount])];
+  sendCsv(res, `top-expenses-${month}.csv`, rows);
+});
+
+app.get('/reports/profit', (req, res) => {
+  const month = req.query.month || today().slice(0, 7);
+  const orderSales = orders.filter(o => sameMonth(orderDate(o), month) && o.paymentStatus === 'paid').reduce((s, o) => s + Number(o.total || 0), 0);
+  const manualSales = dailySales.filter(s => sameMonth(s.date, month)).reduce((s, x) => s + Number(x.amount || 0), 0);
+  const totalExpenses = expenses.filter(e => sameMonth(e.date, month)).reduce((s, e) => s + Number(e.amount || 0), 0);
+  const totalSales = orderSales + manualSales;
+  const profit = totalSales - totalExpenses;
+  const margin = totalSales ? (profit / totalSales) * 100 : 0;
+  const rows = [
+    ['Report', 'Profit Report'],
+    ['Month', month],
+    ['Currency', settings.currency],
+    [],
+    ['Metric', 'Amount'],
+    ['Paid Order Sales', orderSales],
+    ['Manual Daily Sales', manualSales],
+    ['Total Sales', totalSales],
+    ['Total Expenses', totalExpenses],
+    ['Net Profit', profit],
+    ['Profit Margin %', margin.toFixed(2)]
+  ];
+  sendCsv(res, `profit-report-${month}.csv`, rows);
+});
 app.listen(PORT, '0.0.0.0', () => console.log(`Cafe POS Pro updated UI running on port ${PORT}`));
