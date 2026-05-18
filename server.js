@@ -50,11 +50,10 @@ function csvEscape(value) {
 }
 
 function sendCsv(res, filename, rows) {
-  const csv = rows.map(row => row.map(csvEscape).join(',')).join('
-');
+  const csv = rows.map(row => row.map(csvEscape).join(',')).join('\\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.send('﻿' + csv);
+  res.send('\\ufeff' + csv);
 }
 
 function sameMonth(dateValue, month) {
