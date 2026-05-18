@@ -14,13 +14,13 @@ let users = [
 ];
 
 let products = [
-  { id: 1, name: 'Coffee', category: 'Drinks', price: 3, active: true },
-  { id: 2, name: 'Tea', category: 'Drinks', price: 2, active: true },
-  { id: 3, name: 'Mojito', category: 'Drinks', price: 5, active: true },
-  { id: 4, name: 'Burger', category: 'Food', price: 8, active: true }
+  { id: 1, name: 'Coffee', category: 'Drinks', price: 3, description: 'قهوة ساخنة', imageUrl: '', active: true },
+  { id: 2, name: 'Tea', category: 'Drinks', price: 2, description: 'شاي تقليدي', imageUrl: '', active: true },
+  { id: 3, name: 'Mojito', category: 'Drinks', price: 5, description: 'مشروب بارد منعش', imageUrl: '', active: true },
+  { id: 4, name: 'Burger', category: 'Food', price: 8, description: 'برغر مع بطاطا', imageUrl: '', active: true }
 ];
 
-let tables = [1, 2, 3, 4, 5, 6, 7, 8].map((number, index) => ({ id: index + 1, number, status: 'free' }));
+let tables = [1, 2, 3, 4, 5, 6, 7, 8].map((number, index) => ({ id: index + 1, number, name: `طاولة ${number}`, status: 'free', active: true }));
 let orders = [];
 let expenses = [];
 let dailySales = [];
@@ -50,18 +50,13 @@ function csvEscape(value) {
 }
 
 function sendCsv(res, filename, rows) {
-  const csv = rows
-    .map(row => row.map(csvEscape).join(','))
-    .join('\\n');
-
+  const csv = rows.map(row => row.map(csvEscape).join(',')).join('
+');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="${filename}"`
-  );
-
-  res.send('\\ufeff' + csv);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send('﻿' + csv);
 }
+
 function sameMonth(dateValue, month) {
   return String(dateValue || '').slice(0, 7) === month;
 }
@@ -123,6 +118,7 @@ app.get('/app', (req, res) => {
       <button class="dark nav-admin" data-screen="users">المستخدمون</button>
       <button class="dark nav-admin" data-screen="products">المنتجات</button>
       <button class="dark nav-admin" data-screen="settings">الإعدادات</button>
+      <button class="dark nav-admin" data-screen="tables">الطاولات و QR</button>
       <button class="dark nav-admin nav-cashier" data-screen="reports">التقارير</button>
       <button class="dark nav-captain" data-screen="captain">الكابتن</button>
       <button class="dark nav-cashier" data-screen="cashier">المحاسب</button>
@@ -150,8 +146,21 @@ app.get('/app', (req, res) => {
   </section>
 
   <section id="products" class="screen hide">
-    <div class="card"><h2>إضافة منتج</h2><div class="row"><input id="productName" placeholder="اسم المنتج"><input id="productCategory" placeholder="التصنيف"><input id="productPrice" type="number" placeholder="السعر"><button id="addProductBtn">إضافة منتج</button></div></div>
+    <div class="card"><h2>إضافة منتج</h2><div class="row"><input id="productName" placeholder="اسم المنتج"><input id="productCategory" placeholder="التصنيف"><input id="productPrice" type="number" placeholder="السعر"><input id="productDescription" placeholder="وصف المنتج"><input id="productImageUrl" placeholder="رابط صورة المنتج URL"><button id="addProductBtn">إضافة منتج</button></div></div>
     <div class="card"><h2>قائمة المنتجات</h2><div id="productsList"></div></div>
+  </section>
+
+  <section id="tables" class="screen hide">
+    <div class="card">
+      <h2>تعريف الطاولات</h2>
+      <div class="row">
+        <input id="tableNumber" type="number" placeholder="رقم الطاولة">
+        <input id="tableName" placeholder="اسم/وصف الطاولة مثال: طاولة خارجية 1">
+        <button id="addTableBtn">إضافة طاولة</button>
+      </div>
+      <p class="muted">رابط QR لكل طاولة يفتح قائمة العميل مباشرة. يمكنك نسخ الرابط وتحويله إلى QR عبر أي مولد QR.</p>
+      <div id="tablesList"></div>
+    </div>
   </section>
 
   <section id="settings" class="screen hide">
@@ -178,6 +187,7 @@ app.get('/app', (req, res) => {
   </section>
 
   <section id="captain" class="screen hide">
+    <div class="card"><h2>طلبات العملاء عبر QR بانتظار اعتماد الكابتن</h2><div id="customerPendingOrders"></div></div>
     <div class="card"><h2>طلب طاولة - كابتن الصالة</h2><div class="row"><select id="captainTable"></select><button id="sendCaptainOrderBtn">إرسال الطلب للمطبخ والمحاسب</button></div><h3>المنتجات</h3><div id="captainProducts" class="products"></div><h3>سلة الكابتن</h3><div id="captainCart"></div></div>
     <div class="card"><h2>طلبات الطاولات</h2><div id="captainOrders"></div></div>
   </section>
@@ -237,9 +247,17 @@ function setupNavigation(){
 function showScreen(id){ document.querySelectorAll('.screen').forEach(s => s.classList.add('hide')); document.getElementById(id).classList.remove('hide'); loadState(); }
 function renderCart(targetId, cart){ const el = document.getElementById(targetId); if(cart.length === 0){ el.innerHTML = '<p class="muted">السلة فارغة</p>'; return; } el.innerHTML = cart.map(item => '<div class="cartLine"><span>' + item.name + ' x ' + item.qty + '</span><b>' + money(item.price * item.qty) + '</b></div>').join('') + '<h3>الإجمالي: ' + money(cartTotal(cart)) + '</h3>'; }
 function addToCart(type, productId){ const product = state.products.find(p => p.id === productId); if(!product) return; const cart = type === 'captain' ? captainCart : cashierCart; const existing = cart.find(i => i.id === product.id); if(existing) existing.qty += 1; else cart.push({ id: product.id, name: product.name, price: product.price, qty: 1 }); renderCart(type === 'captain' ? 'captainCart' : 'cashierCart', cart); }
-function renderProductButtons(){ const captain = document.getElementById('captainProducts'); const cashier = document.getElementById('cashierProducts'); captain.innerHTML = ''; cashier.innerHTML = ''; state.products.forEach(product => { const c1 = document.createElement('div'); c1.className = 'prod'; c1.innerHTML = '<b>' + product.name + '</b><br><span class="muted">' + product.category + '</span><br>' + money(product.price) + '<br><br><button>إضافة</button>'; c1.querySelector('button').addEventListener('click', () => addToCart('captain', product.id)); captain.appendChild(c1); const c2 = document.createElement('div'); c2.className = 'prod'; c2.innerHTML = '<b>' + product.name + '</b><br><span class="muted">' + product.category + '</span><br>' + money(product.price) + '<br><br><button>إضافة</button>'; c2.querySelector('button').addEventListener('click', () => addToCart('cashier', product.id)); cashier.appendChild(c2); }); }
+function productCardHtml(product){
+  const img = product.imageUrl ? '<img src="' + product.imageUrl + '" style="width:100%;height:90px;object-fit:cover;border-radius:10px;margin-bottom:8px" onerror="this.style.display=\'none\'">' : '';
+  return img + '<b>' + product.name + '</b><br><span class="muted">' + product.category + '</span><br><span class="small">' + (product.description || '') + '</span><br>' + money(product.price) + '<br><br><button>إضافة</button>';
+}
+function renderProductButtons(){ const captain = document.getElementById('captainProducts'); const cashier = document.getElementById('cashierProducts'); captain.innerHTML = ''; cashier.innerHTML = ''; state.products.filter(p => p.active).forEach(product => { const c1 = document.createElement('div'); c1.className = 'prod'; c1.innerHTML = productCardHtml(product); c1.querySelector('button').addEventListener('click', () => addToCart('captain', product.id)); captain.appendChild(c1); const c2 = document.createElement('div'); c2.className = 'prod'; c2.innerHTML = productCardHtml(product); c2.querySelector('button').addEventListener('click', () => addToCart('cashier', product.id)); cashier.appendChild(c2); }); }
+function renderCustomerPendingOrders(orders){
+  if(orders.length === 0) return '<p class="muted">لا توجد طلبات عملاء بانتظار الاعتماد</p>';
+  return '<table><tr><th>ID</th><th>الطاولة</th><th>الإجمالي</th><th>الأصناف</th><th>إجراء</th></tr>' + orders.map(o => '<tr><td>' + o.id + '</td><td>' + o.table + '</td><td>' + money(o.total) + '</td><td>' + o.items.map(i => i.name + ' x ' + i.qty).join('<br>') + '</td><td><button class="ok approveCustomerOrderBtn" data-id="' + o.id + '">اعتماد وإرسال للمطبخ والمحاسب</button> <button class="danger rejectCustomerOrderBtn" data-id="' + o.id + '">رفض</button></td></tr>').join('') + '</table>';
+}
 function renderOrders(orders, withPay){ if(orders.length === 0) return '<p class="muted">لا توجد طلبات</p>'; return '<table><tr><th>ID</th><th>النوع/الطاولة</th><th>الحالة</th><th>الدفع</th><th>الإجمالي</th><th>الأصناف</th><th>إجراء</th></tr>' + orders.map(o => { const items = o.items.map(i => i.name + ' x ' + i.qty).join('<br>'); const pay = withPay && o.paymentStatus === 'unpaid' ? '<button class="ok payBtn" data-id="' + o.id + '">دفع</button>' : ''; return '<tr><td>' + o.id + '</td><td>' + o.type + ' ' + (o.table || '') + '</td><td><span class="pill">' + o.status + '</span></td><td><span class="pill">' + o.paymentStatus + '</span></td><td>' + money(o.total) + '</td><td>' + items + '</td><td>' + pay + '</td></tr>'; }).join('') + '</table>'; }
-function bindButtons(){ document.querySelectorAll('.payBtn').forEach(btn => btn.addEventListener('click', async function(){ await api('/api/orders/' + btn.getAttribute('data-id') + '/pay', { method: 'POST' }); await loadState(); })); document.querySelectorAll('.toggleUserBtn').forEach(btn => btn.addEventListener('click', async function(){ await api('/api/users/' + btn.getAttribute('data-id') + '/toggle', { method: 'POST' }); await loadState(); })); document.querySelectorAll('.deleteUserBtn').forEach(btn => btn.addEventListener('click', async function(){ if(confirm('حذف المستخدم؟')){ await api('/api/users/' + btn.getAttribute('data-id'), { method: 'DELETE' }); await loadState(); } })); }
+function bindButtons(){ document.querySelectorAll('.payBtn').forEach(btn => btn.addEventListener('click', async function(){ await api('/api/orders/' + btn.getAttribute('data-id') + '/pay', { method: 'POST' }); await loadState(); })); document.querySelectorAll('.toggleUserBtn').forEach(btn => btn.addEventListener('click', async function(){ await api('/api/users/' + btn.getAttribute('data-id') + '/toggle', { method: 'POST' }); await loadState(); })); document.querySelectorAll('.deleteUserBtn').forEach(btn => btn.addEventListener('click', async function(){ if(confirm('حذف المستخدم؟')){ await api('/api/users/' + btn.getAttribute('data-id'), { method: 'DELETE' }); await loadState(); } })); document.querySelectorAll('.deleteTableBtn').forEach(btn => btn.addEventListener('click', async function(){ if(confirm('حذف الطاولة؟')){ await api('/api/tables/' + btn.getAttribute('data-id'), { method:'DELETE' }); await loadState(); } })); document.querySelectorAll('.deleteProductBtn').forEach(btn => btn.addEventListener('click', async function(){ if(confirm('حذف المنتج؟')){ await api('/api/products/' + btn.getAttribute('data-id'), { method:'DELETE' }); await loadState(); } })); document.querySelectorAll('.deleteExpenseCategoryBtn').forEach(btn => btn.addEventListener('click', async function(){ if(confirm('حذف بند المصروف؟')){ await api('/api/expense-categories/' + btn.getAttribute('data-id'), { method:'DELETE' }); await loadState(); } })); document.querySelectorAll('.approveCustomerOrderBtn').forEach(btn => btn.addEventListener('click', async function(){ await api('/api/orders/' + btn.getAttribute('data-id') + '/approve-customer', { method:'POST' }); await loadState(); })); document.querySelectorAll('.rejectCustomerOrderBtn').forEach(btn => btn.addEventListener('click', async function(){ await api('/api/orders/' + btn.getAttribute('data-id') + '/reject-customer', { method:'POST' }); await loadState(); })); }
 function renderKitchen(){ const active = state.orders.filter(o => o.status !== 'closed'); const el = document.getElementById('kitchenOrders'); if(active.length === 0){ el.innerHTML = '<p class="muted">لا توجد طلبات حالياً</p>'; return; } el.innerHTML = active.map(o => '<div class="card"><h3>طلب #' + o.id + ' - ' + o.type + ' ' + (o.table || '') + '</h3><p>' + o.items.map(i => i.name + ' x ' + i.qty).join('<br>') + '</p><p>الحالة: ' + o.status + '</p><button class="warn statusBtn" data-id="' + o.id + '" data-status="preparing">تحضير</button> <button class="ok statusBtn" data-id="' + o.id + '" data-status="ready">جاهز</button></div>').join(''); document.querySelectorAll('.statusBtn').forEach(btn => btn.addEventListener('click', async function(){ await api('/api/orders/' + btn.getAttribute('data-id') + '/status', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status: btn.getAttribute('data-status')}) }); await loadState(); })); }
 async function loadState(){
   state = await api('/api/state');
@@ -250,9 +268,11 @@ async function loadState(){
   dashboardOrders.innerHTML = renderOrders(state.orders.slice(-10).reverse(), false);
   currencySelect.value = state.settings.currency;
   expenseCategory.innerHTML = state.expenseCategories.map(c => '<option value="' + c.name + '">' + c.name + '</option>').join('');
-  expenseCategoriesList.innerHTML = '<table><tr><th>ID</th><th>بند المصروف</th></tr>' + state.expenseCategories.map(c => '<tr><td>' + c.id + '</td><td>' + c.name + '</td></tr>').join('') + '</table>';
+  expenseCategoriesList.innerHTML = '<table><tr><th>ID</th><th>بند المصروف</th><th>إجراء</th></tr>' + state.expenseCategories.map(c => '<tr><td>' + c.id + '</td><td>' + c.name + '</td><td><button class="danger deleteExpenseCategoryBtn" data-id="' + c.id + '">حذف</button></td></tr>').join('') + '</table>';
   usersList.innerHTML = '<table><tr><th>ID</th><th>المستخدم</th><th>الصلاحية</th><th>الحالة</th><th>إجراء</th></tr>' + state.users.map(u => '<tr><td>' + u.id + '</td><td>' + u.username + '</td><td>' + u.role + '</td><td>' + (u.active ? 'فعال' : 'موقوف') + '</td><td><button class="warn toggleUserBtn" data-id="' + u.id + '">' + (u.active ? 'إيقاف' : 'تفعيل') + '</button> <button class="danger deleteUserBtn" data-id="' + u.id + '">حذف</button></td></tr>').join('') + '</table>';
-  productsList.innerHTML = '<table><tr><th>ID</th><th>المنتج</th><th>التصنيف</th><th>السعر</th></tr>' + state.products.map(p => '<tr><td>' + p.id + '</td><td>' + p.name + '</td><td>' + p.category + '</td><td>' + money(p.price) + '</td></tr>').join('') + '</table>';
+  productsList.innerHTML = '<table><tr><th>ID</th><th>المنتج</th><th>التصنيف</th><th>الوصف</th><th>الصورة</th><th>السعر</th><th>إجراء</th></tr>' + state.products.map(p => '<tr><td>' + p.id + '</td><td>' + p.name + '</td><td>' + p.category + '</td><td>' + (p.description || '') + '</td><td>' + (p.imageUrl ? '<a href="' + p.imageUrl + '" target="_blank">فتح</a>' : '') + '</td><td>' + money(p.price) + '</td><td><button class="danger deleteProductBtn" data-id="' + p.id + '">حذف</button></td></tr>').join('') + '</table>';
+  tablesList.innerHTML = '<table><tr><th>ID</th><th>رقم الطاولة</th><th>الاسم</th><th>الحالة</th><th>رابط العميل / QR</th><th>إجراء</th></tr>' + state.tables.map(t => '<tr><td>' + t.id + '</td><td>' + t.number + '</td><td>' + (t.name || '') + '</td><td>' + t.status + '</td><td><a target="_blank" href="/menu/' + t.number + '">' + location.origin + '/menu/' + t.number + '</a></td><td><button class="danger deleteTableBtn" data-id="' + t.id + '">حذف</button></td></tr>').join('') + '</table>'; 
+  customerPendingOrders.innerHTML = renderCustomerPendingOrders(state.orders.filter(o => o.source === 'customer' && o.status === 'customer_pending')); 
   captainTable.innerHTML = state.tables.map(t => '<option value="' + t.number + '">طاولة ' + t.number + ' - ' + t.status + '</option>').join('');
   renderProductButtons(); renderCart('captainCart', captainCart); renderCart('cashierCart', cashierCart);
   captainOrders.innerHTML = renderOrders(state.orders, false); pendingOrders.innerHTML = renderOrders(state.orders.filter(o => o.paymentStatus === 'unpaid'), true); renderKitchen();
@@ -263,12 +283,13 @@ async function loadState(){
 function setupActions(){
   expenseDate.value = new Date().toISOString().slice(0,10); dailySaleDate.value = new Date().toISOString().slice(0,10);
   addUserBtn.addEventListener('click', async function(){ await api('/api/users', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username: newUsername.value, password: newPassword.value, role: newRole.value }) }); newUsername.value=''; newPassword.value=''; await loadState(); alert('تمت إضافة المستخدم'); });
-  addProductBtn.addEventListener('click', async function(){ await api('/api/products', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: productName.value, category: productCategory.value, price: Number(productPrice.value) }) }); productName.value=''; productCategory.value=''; productPrice.value=''; await loadState(); alert('تمت إضافة المنتج'); });
+  addProductBtn.addEventListener('click', async function(){ await api('/api/products', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: productName.value, category: productCategory.value, price: Number(productPrice.value), description: productDescription.value, imageUrl: productImageUrl.value }) }); productName.value=''; productCategory.value=''; productPrice.value=''; productDescription.value=''; productImageUrl.value=''; await loadState(); alert('تمت إضافة المنتج'); });
   sendCaptainOrderBtn.addEventListener('click', async function(){ if(captainCart.length === 0){ alert('اختر منتجات أولاً'); return; } await api('/api/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type:'Table', table: captainTable.value, items: captainCart, createdBy: currentUser.username, paymentStatus:'unpaid', status:'pending' }) }); captainCart = []; await loadState(); alert('تم إرسال الطلب للمحاسب والمطبخ'); });
   sendCashierSaleBtn.addEventListener('click', async function(){ if(cashierCart.length === 0){ alert('اختر منتجات أولاً'); return; } await api('/api/orders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type: saleType.value, table: cashierTable.value, items: cashierCart, createdBy: currentUser.username, paymentStatus:'paid', status:'closed' }) }); cashierCart = []; cashierTable.value=''; await loadState(); alert('تم تسجيل البيع المباشر'); });
   addExpenseBtn.addEventListener('click', async function(){ await api('/api/expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ date: expenseDate.value, category: expenseCategory.value, title: expenseTitle.value, amount: Number(expenseAmount.value), createdBy: currentUser.username }) }); expenseTitle.value=''; expenseAmount.value=''; await loadState(); alert('تمت إضافة المصروف'); });
   saveCurrencyBtn.addEventListener('click', async function(){ await api('/api/settings/currency', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ currency: currencySelect.value }) }); await loadState(); alert('تم حفظ العملة'); });
   addExpenseCategoryBtn.addEventListener('click', async function(){ await api('/api/expense-categories', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: expenseCategoryName.value }) }); expenseCategoryName.value=''; await loadState(); alert('تمت إضافة بند المصروف'); });
+  addTableBtn.addEventListener('click', async function(){ await api('/api/tables', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ number: Number(tableNumber.value), name: tableName.value }) }); tableNumber.value=''; tableName.value=''; await loadState(); alert('تمت إضافة الطاولة'); });
   reportMonth.value = new Date().toISOString().slice(0,7);
   exportMonthlyBtn.addEventListener('click', function(){ window.open('/reports/monthly?month=' + reportMonth.value, '_blank'); });
   exportTopProductsBtn.addEventListener('click', function(){ window.open('/reports/top-products?month=' + reportMonth.value, '_blank'); });
@@ -286,13 +307,47 @@ app.post('/api/login', (req, res) => {
   res.json({ ok: true, user: { id: found.id, username: found.username, role: found.role } });
 });
 app.get('/api/state', (req, res) => res.json({ users, products, tables, orders, expenses, dailySales, expenseCategories, settings }));
+
+app.get('/menu/:tableNumber', (req, res) => {
+  const table = tables.find(t => String(t.number) === String(req.params.tableNumber) && t.active);
+  if (!table) return res.status(404).send('Table not found');
+  res.send(htmlPage(`
+<div class="wrap">
+  <div class="top"><div><div class="brand">Cafe Menu</div><div class="muted">${table.name || 'طاولة ' + table.number}</div></div></div>
+  <div class="card"><h2>اختر طلبك</h2><p class="muted">سيتم إرسال الطلب إلى كابتن الصالة لاعتماده.</p><div id="customerProducts" class="products"></div><h3>سلتك</h3><div id="customerCart"></div><button id="sendCustomerOrderBtn">إرسال الطلب</button><p id="customerMsg" class="muted"></p></div>
+</div>
+<script>
+const tableNumber = '${table.number}';
+let products = ${JSON.stringify(products.filter(p => p.active))};
+let cart = [];
+let currency = '${settings.currency}';
+function money(v){ return Number(v||0).toFixed(2) + ' ' + currency; }
+function total(){ return cart.reduce((s,i)=>s+i.price*i.qty,0); }
+function render(){
+  const list = document.getElementById('customerProducts');
+  list.innerHTML = '';
+  products.forEach(p => { const d = document.createElement('div'); d.className='prod'; d.innerHTML = (p.imageUrl ? '<img src="'+p.imageUrl+'" style="width:100%;height:110px;object-fit:cover;border-radius:10px;margin-bottom:8px" onerror="this.style.display=\'none\'">' : '') + '<b>'+p.name+'</b><br><span class="muted">'+p.category+'</span><br><span class="small">'+(p.description||'')+'</span><br>'+money(p.price)+'<br><br><button>إضافة</button>'; d.querySelector('button').addEventListener('click',()=>{ const ex=cart.find(x=>x.id===p.id); if(ex) ex.qty++; else cart.push({id:p.id,name:p.name,price:p.price,qty:1}); renderCart(); }); list.appendChild(d); });
+  renderCart();
+}
+function renderCart(){ const el=document.getElementById('customerCart'); if(!cart.length){el.innerHTML='<p class="muted">السلة فارغة</p>';return;} el.innerHTML = cart.map(i=>'<div class="cartLine"><span>'+i.name+' x '+i.qty+'</span><b>'+money(i.price*i.qty)+'</b></div>').join('') + '<h3>الإجمالي: '+money(total())+'</h3>'; }
+document.getElementById('sendCustomerOrderBtn').addEventListener('click', async ()=>{ if(!cart.length){alert('اختر منتجات أولاً');return;} const r = await fetch('/api/customer-orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table: tableNumber, items: cart})}); const data = await r.json(); cart=[]; renderCart(); document.getElementById('customerMsg').innerText='تم إرسال الطلب رقم '+data.id+' إلى كابتن الصالة'; });
+render();
+</script>`));
+});
 app.post('/api/users', (req, res) => { const user = { id: nextId(users), username: req.body.username, password: req.body.password, role: req.body.role, active: true }; users.push(user); res.json(user); });
 app.post('/api/users/:id/toggle', (req, res) => { const user = users.find(u => u.id === Number(req.params.id)); if (!user) return res.status(404).json({ error: 'User not found' }); if (user.username === 'admin') return res.status(400).json({ error: 'Cannot disable admin' }); user.active = !user.active; res.json(user); });
 app.delete('/api/users/:id', (req, res) => { const id = Number(req.params.id); const user = users.find(u => u.id === id); if (!user) return res.status(404).json({ error: 'User not found' }); if (user.username === 'admin') return res.status(400).json({ error: 'Cannot delete admin' }); users = users.filter(u => u.id !== id); res.json({ ok: true }); });
-app.post('/api/products', (req, res) => { const product = { id: nextId(products), name: req.body.name, category: req.body.category || 'General', price: Number(req.body.price || 0), active: true }; products.push(product); res.json(product); });
+app.post('/api/products', (req, res) => { const product = { id: nextId(products), name: req.body.name, category: req.body.category || 'General', price: Number(req.body.price || 0), description: req.body.description || '', imageUrl: req.body.imageUrl || '', active: true }; products.push(product); res.json(product); });
+app.post('/api/tables', (req, res) => { const number = Number(req.body.number); if (!number) return res.status(400).json({ error: 'Table number is required' }); const table = { id: nextId(tables), number, name: req.body.name || `طاولة ${number}`, status: 'free', active: true }; tables.push(table); res.json(table); });
+app.delete('/api/tables/:id', (req, res) => { const id = Number(req.params.id); tables = tables.filter(t => t.id !== id); res.json({ ok: true }); });
+app.delete('/api/products/:id', (req, res) => { const id = Number(req.params.id); products = products.filter(p => p.id !== id); res.json({ ok: true }); });
+app.delete('/api/expense-categories/:id', (req, res) => { const id = Number(req.params.id); expenseCategories = expenseCategories.filter(c => c.id !== id); res.json({ ok: true }); });
 app.post('/api/orders', (req, res) => { const items = req.body.items || []; const total = items.reduce((sum, i) => sum + Number(i.price) * Number(i.qty), 0); const order = { id: nextId(orders), type: req.body.type || 'Table', table: req.body.table || '', items, total, status: req.body.status || 'pending', paymentStatus: req.body.paymentStatus || 'unpaid', createdBy: req.body.createdBy || 'system', createdAt: new Date().toISOString() }; orders.push(order); const table = tables.find(t => String(t.number) === String(order.table)); if (table) table.status = 'busy'; res.json(order); });
 app.post('/api/orders/:id/pay', (req, res) => { const order = orders.find(o => o.id === Number(req.params.id)); if (!order) return res.status(404).json({ error: 'Order not found' }); order.paymentStatus = 'paid'; order.status = 'closed'; const table = tables.find(t => String(t.number) === String(order.table)); if (table) table.status = 'free'; res.json(order); });
 app.post('/api/orders/:id/status', (req, res) => { const order = orders.find(o => o.id === Number(req.params.id)); if (!order) return res.status(404).json({ error: 'Order not found' }); order.status = req.body.status; res.json(order); });
+app.post('/api/customer-orders', (req, res) => { const items = req.body.items || []; const total = items.reduce((sum, i) => sum + Number(i.price) * Number(i.qty), 0); const order = { id: nextId(orders), source: 'customer', type: 'Customer QR', table: req.body.table || '', items, total, status: 'customer_pending', paymentStatus: 'unpaid', createdBy: 'customer', createdAt: new Date().toISOString() }; orders.push(order); res.json(order); });
+app.post('/api/orders/:id/approve-customer', (req, res) => { const order = orders.find(o => o.id === Number(req.params.id)); if (!order) return res.status(404).json({ error: 'Order not found' }); order.status = 'pending'; order.createdBy = 'captain-approved'; const table = tables.find(t => String(t.number) === String(order.table)); if (table) table.status = 'busy'; res.json(order); });
+app.post('/api/orders/:id/reject-customer', (req, res) => { const order = orders.find(o => o.id === Number(req.params.id)); if (!order) return res.status(404).json({ error: 'Order not found' }); order.status = 'rejected'; res.json(order); });
 app.post('/api/expenses', (req, res) => { const expense = { id: nextId(expenses), date: req.body.date || today(), category: req.body.category || 'أخرى', title: req.body.title, amount: Number(req.body.amount || 0), createdBy: req.body.createdBy || 'system', createdAt: new Date().toISOString() }; expenses.push(expense); res.json(expense); });
 app.post('/api/expense-categories', (req, res) => { const name = String(req.body.name || '').trim(); if (!name) return res.status(400).json({ error: 'Name is required' }); const category = { id: nextId(expenseCategories), name }; expenseCategories.push(category); res.json(category); });
 app.post('/api/settings/currency', (req, res) => { settings.currency = req.body.currency || 'SYP'; res.json(settings); });
