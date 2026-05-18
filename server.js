@@ -50,13 +50,18 @@ function csvEscape(value) {
 }
 
 function sendCsv(res, filename, rows) {
-  const csv = rows.map(row => row.map(csvEscape).join(',')).join('
-');
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.send('﻿' + csv);
-}
+  const csv = rows
+    .map(row => row.map(csvEscape).join(','))
+    .join('\\n');
 
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}"`
+  );
+
+  res.send('\\ufeff' + csv);
+}
 function sameMonth(dateValue, month) {
   return String(dateValue || '').slice(0, 7) === month;
 }
